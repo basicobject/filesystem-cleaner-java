@@ -15,8 +15,13 @@ public class FileSystemCleaner {
       try {
 //          Files.walkFileTree(rootPath, dotFileCleaner);
           Files.walkFileTree(rootPath, duplicateFileCleaner);
+          while(!duplicateFileCleaner.allDone()) {
+              System.out.println("Waiting for all threads to finish");
+              Thread.sleep(100);
+          }
+          duplicateFileCleaner.shutdownExecutorService();
           System.out.println("Total number of files deleted " + duplicateFileCleaner.filesCleaned);
-          System.out.println("Total disk space freed " + duplicateFileCleaner.humanBytesRemoved(duplicateFileCleaner.bytesRemoved));
+          System.out.println("Total disk space freed " + duplicateFileCleaner.humanBytesRemoved(duplicateFileCleaner.bytesRemoved.get()));
       } catch (Exception e) {
           e.printStackTrace();
           System.exit(-1);

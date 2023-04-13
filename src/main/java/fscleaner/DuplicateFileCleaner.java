@@ -6,33 +6,43 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class DuplicateFileCleaner extends SimpleFileVisitor<Path> implements HelperMethods {
-    public int filesCleaned = 0;
-    public long bytesRemoved = 0;
-    private final HashMap<String, Integer> checksumHashMap = new HashMap<String, Integer>();
+    public AtomicInteger filesCleaned = new AtomicInteger(0);
+    public AtomicLong bytesRemoved = new AtomicLong(0);
+    private final ConcurrentHashMap<String, Integer> checksumHashMap = new ConcurrentHashMap<>();
+
+    private ExecutorService executor = Executors.newFixedThreadPool(8);
+    private ConcurrentLinkedQueue<Future<?>> queue = new ConcurrentLinkedQueue();
 
     @Override
     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-        if(attrs.isRegularFile()) {
-            var checksum = getChecksum(file);
+        var result = executor.submit(() -> {
+            if(attrs.isRegularFile()) {
+                var checksum = getChecksum(file);
 
-            if (checksum.length() > 0) {
-                if(checksumHashMap.containsKey(checksum)) {
-                    try {
-                        System.out.println("Duplicate file found " + file.getFileName());
-                        checksumHashMap.put(checksum, checksumHashMap.get(checksum) + 1);
-                        Files.delete(file);
-                        filesCleaned++;
-                        bytesRemoved += attrs.size();
-                    } catch (IOException e){
-                        System.out.println("Unable to delete duplicate file " + file.getFileName());
+                if (checksum.length() > 0) {
+                    if(checksumHashMap.containsKey(checksum)) {
+                        try {
+                            System.out.println("Duplicate file found " + file.getFileName());
+                            checksumHashMap.put(checksum, checksumHashMap.get(checksum) + 1);
+                            Files.delete(file);
+                            filesCleaned.incrementAndGet();
+                            bytesRemoved.set(bytesRemoved.get() + attrs.size());;
+                        } catch (IOException e){
+                            System.out.println("Unable to delete duplicate file " + file.getFileName());
+                        }
+                    } else {
+                        checksumHashMap.put(checksum, 1);
                     }
-                } else {
-                    checksumHashMap.put(checksum, 1);
                 }
             }
-        }
+        });
+
+        queue.add(result);
 
         return FileVisitResult.CONTINUE;
     }
@@ -45,6 +55,15 @@ public class DuplicateFileCleaner extends SimpleFileVisitor<Path> implements Hel
         }
 
         return super.visitFileFailed(file, exc);
+    }
+
+    public void shutdownExecutorService() {
+        executor.shutdown();
+    }
+
+    public boolean allDone() {
+        var list = queue.stream().toList();
+        return list.stream().map((x) -> x.isDone()).allMatch((x) -> x == true);
     }
 
     private String getChecksum(Path file)  {
